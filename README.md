@@ -35,11 +35,15 @@ The project follows **enterprise-level best practices** in data preparation, val
   - Vacancy status
 
 ---
+## 🧱 Project Structure
+
+```
 Nashville-Housing-DB/
-│
-├── data/ # Raw data (optional / placeholder)
-├── Nashville-Housing-DB.sql # Main SQL cleaning & quality pipeline
-├── README.md # Project documentation
+├── data/                        # Raw data (optional / placeholder)
+├── Nashville-Housing-DB.sql     # Main SQL cleaning & data quality pipeline
+└── README.md                    # Project documentation
+```
+
 
 ---
 
