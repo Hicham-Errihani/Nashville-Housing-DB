@@ -847,6 +847,109 @@ SELECT
 FROM w;
 GO
 
+/* =========================================================
+   STEP 11 – BI READY VIEWS
+   ========================================================= */
+
+USE [Nashville-Housing-DB];
+GO
+
+-- Drop & recreate (script ré-exécutable)
+IF OBJECT_ID('dbo.vw_NashvilleHousing_Fact', 'V') IS NOT NULL
+    DROP VIEW dbo.vw_NashvilleHousing_Fact;
+GO
+
+CREATE VIEW dbo.vw_NashvilleHousing_Fact AS
+SELECT
+    UniqueID,
+    ParcelID,
+    SaleDateConverted,
+    YEAR(SaleDateConverted) AS SaleYear,
+    MONTH(SaleDateConverted) AS SaleMonth,
+    DATEFROMPARTS(YEAR(SaleDateConverted), MONTH(SaleDateConverted), 1) AS SaleMonthStart,
+    SalePrice,
+    PropertySplitAddress,
+    PropertySplitCity,
+    OwnerSplitCity,
+    OwnerSplitState,
+    SoldAsVacant
+FROM dbo.NashvilleHousing_Clean
+WHERE SaleDateConverted IS NOT NULL
+  AND SalePrice IS NOT NULL
+  AND SalePrice > 0
+  AND QualityFlag = 1;
+GO
+
+IF OBJECT_ID('dbo.vw_KPI_MonthlyTrend', 'V') IS NOT NULL
+    DROP VIEW dbo.vw_KPI_MonthlyTrend;
+GO
+
+CREATE VIEW dbo.vw_KPI_MonthlyTrend AS
+SELECT
+    DATEFROMPARTS(YEAR(SaleDateConverted), MONTH(SaleDateConverted), 1) AS MonthStart,
+    COUNT(*) AS TransactionsCount,
+    AVG(CAST(SalePrice AS FLOAT)) AS AvgPrice,
+    SUM(CAST(SalePrice AS BIGINT)) AS TotalSalesValue
+FROM dbo.NashvilleHousing_Clean
+WHERE SaleDateConverted IS NOT NULL
+  AND SalePrice IS NOT NULL AND SalePrice > 0
+  AND QualityFlag = 1
+GROUP BY DATEFROMPARTS(YEAR(SaleDateConverted), MONTH(SaleDateConverted), 1);
+GO
+
+IF OBJECT_ID('dbo.vw_KPI_CityLeaderboard', 'V') IS NOT NULL
+    DROP VIEW dbo.vw_KPI_CityLeaderboard;
+GO
+
+CREATE VIEW dbo.vw_KPI_CityLeaderboard AS
+SELECT
+    PropertySplitCity AS City,
+    COUNT(*) AS TransactionsCount,
+    AVG(CAST(SalePrice AS FLOAT)) AS AvgPrice,
+    SUM(CAST(SalePrice AS BIGINT)) AS TotalSalesValue
+FROM dbo.NashvilleHousing_Clean
+WHERE PropertySplitCity IS NOT NULL
+  AND SalePrice IS NOT NULL AND SalePrice > 0
+  AND QualityFlag = 1
+GROUP BY PropertySplitCity;
+GO
+
+IF OBJECT_ID('dbo.vw_KPI_VacantRateByCity', 'V') IS NOT NULL
+    DROP VIEW dbo.vw_KPI_VacantRateByCity;
+GO
+
+CREATE VIEW dbo.vw_KPI_VacantRateByCity AS
+SELECT
+    PropertySplitCity AS City,
+    COUNT(*) AS TotalTransactions,
+    SUM(CASE WHEN SoldAsVacant = 'Yes' THEN 1 ELSE 0 END) AS VacantTransactions,
+    CAST(SUM(CASE WHEN SoldAsVacant = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / NULLIF(COUNT(*), 0) * 100.0 AS VacantRatePct
+FROM dbo.NashvilleHousing_Clean
+WHERE PropertySplitCity IS NOT NULL
+  AND QualityFlag = 1
+GROUP BY PropertySplitCity;
+GO
+
+SELECT TOP 20 * FROM dbo.vw_NashvilleHousing_Fact ORDER BY SaleDateConverted DESC;
+SELECT TOP 20 * FROM dbo.vw_KPI_MonthlyTrend ORDER BY MonthStart DESC;
+SELECT TOP 20 * FROM dbo.vw_KPI_CityLeaderboard ORDER BY TotalSalesValue DESC;
+SELECT TOP 20 * FROM dbo.vw_KPI_VacantRateByCity ORDER BY VacantRatePct DESC;
+GO
+
+SELECT * FROM dbo.vw_NashvilleHousing_Fact;
+SELECT * FROM dbo.vw_KPI_MonthlyTrend;
+SELECT * FROM dbo.vw_KPI_CityLeaderboard;
+SELECT * FROM dbo.vw_KPI_VacantRateByCity;
+
+
+
+
+
+
+
+
+
 
 
 
