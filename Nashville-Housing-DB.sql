@@ -518,6 +518,337 @@ FROM dbo.NashvilleHousing_Clean
 ORDER BY SaleDateConverted DESC;
 GO
 
+/* =========================================================
+   STEP 10 – KPI & ANALYTICS QUERIES (BUSINESS-READY)
+   Dataset : dbo.NashvilleHousing_Clean (GOLD layer)
+   Purpose :
+   - Provide real, decision-oriented KPIs for reporting (BI)
+   - Support market analysis (trend, geography, segments)
+   - Ensure metrics are based on clean/validated records
+   ========================================================= */
+
+USE [Nashville-Housing-DB];
+GO
+
+/* ---------------------------------------------------------
+   10.0 DATA SCOPE / CONTROL
+   Why: Always confirm the analysis perimeter (rows, dates).
+   --------------------------------------------------------- */
+SELECT
+    COUNT(*) AS total_rows,
+    MIN(SaleDateConverted) AS min_sale_date,
+    MAX(SaleDateConverted) AS max_sale_date,
+    SUM(CASE WHEN QualityFlag = 1 THEN 1 ELSE 0 END) AS quality_rows
+FROM dbo.NashvilleHousing_Clean;
+GO
+
+
+/* =========================================================
+   SECTION A — CORE MARKET KPIs (Global)
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   KPI A1 — Sales volume & total market value (Turnover)
+   Why: High-level market size indicator.
+   --------------------------------------------------------- */
+SELECT
+    COUNT(*) AS transactions_count,
+    SUM(CAST(SalePrice AS BIGINT)) AS total_sales_value,
+    AVG(CAST(SalePrice AS BIGINT)) AS avg_sale_price
+FROM dbo.NashvilleHousing_Clean
+WHERE SalePrice IS NOT NULL AND SalePrice > 0;
+GO
+
+/* ---------------------------------------------------------
+   KPI A2 — Median price (robust to outliers)
+   Why: Median is more stable than average in real estate.
+   --------------------------------------------------------- */
+SELECT DISTINCT
+    PERCENTILE_CONT(0.5) 
+        WITHIN GROUP (ORDER BY SalePrice)
+        OVER () AS median_sale_price
+FROM dbo.NashvilleHousing_Clean
+WHERE SalePrice IS NOT NULL AND SalePrice > 0;
+GO
+
+
+/* ---------------------------------------------------------
+   KPI A3 — Price distribution (Quartiles)
+   Why: Understand spread and segmentation of the market.
+   --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   KPI A3 – Price distribution (Quartiles)
+   Why: Understand market spread and segmentation
+   --------------------------------------------------------- */
+SELECT DISTINCT
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY SalePrice) OVER () AS Q1,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY SalePrice) OVER () AS Median,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY SalePrice) OVER () AS Q3
+FROM dbo.NashvilleHousing_Clean
+WHERE SalePrice IS NOT NULL AND SalePrice > 0;
+GO
+
+
+/* ---------------------------------------------------------
+   KPI A4 — Price dispersion (Standard deviation)
+   Why: Risk/variability indicator for market stability.
+   --------------------------------------------------------- */
+SELECT
+    AVG(CAST(SalePrice AS FLOAT)) AS avg_price,
+    STDEV(CAST(SalePrice AS FLOAT)) AS stdev_price
+FROM dbo.NashvilleHousing_Clean
+WHERE SalePrice IS NOT NULL AND SalePrice > 0;
+GO
+
+
+/* =========================================================
+   SECTION B — TIME SERIES KPIs (Trends)
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   KPI B1 — Monthly trend (transactions, avg price, total value)
+   Why: Classic BI view for seasonality and growth.
+   --------------------------------------------------------- */
+SELECT
+    DATEFROMPARTS(YEAR(SaleDateConverted), MONTH(SaleDateConverted), 1) AS month_start,
+    COUNT(*) AS transactions_count,
+    AVG(CAST(SalePrice AS BIGINT)) AS avg_price,
+    SUM(CAST(SalePrice AS BIGINT)) AS total_sales_value
+FROM dbo.NashvilleHousing_Clean
+WHERE SaleDateConverted IS NOT NULL
+  AND SalePrice IS NOT NULL AND SalePrice > 0
+GROUP BY DATEFROMPARTS(YEAR(SaleDateConverted), MONTH(SaleDateConverted), 1)
+ORDER BY month_start;
+GO
+
+/* ---------------------------------------------------------
+   KPI B2 — YoY (Year-over-Year) average price change
+   Why: Growth metric used in executive reporting.
+   --------------------------------------------------------- */
+WITH yearly AS (
+    SELECT
+        YEAR(SaleDateConverted) AS sale_year,
+        AVG(CAST(SalePrice AS FLOAT)) AS avg_price
+    FROM dbo.NashvilleHousing_Clean
+    WHERE SaleDateConverted IS NOT NULL
+      AND SalePrice IS NOT NULL AND SalePrice > 0
+    GROUP BY YEAR(SaleDateConverted)
+)
+SELECT
+    sale_year,
+    avg_price,
+    (avg_price - LAG(avg_price) OVER (ORDER BY sale_year))
+        / NULLIF(LAG(avg_price) OVER (ORDER BY sale_year), 0) * 100.0 AS yoy_avg_price_pct
+FROM yearly
+ORDER BY sale_year;
+GO
+
+/* ---------------------------------------------------------
+   KPI B3 — Rolling 3-month average price (smoothing)
+   Why: Reduces noise for decision-making.
+   --------------------------------------------------------- */
+WITH monthly AS (
+    SELECT
+        DATEFROMPARTS(YEAR(SaleDateConverted), MONTH(SaleDateConverted), 1) AS month_start,
+        AVG(CAST(SalePrice AS FLOAT)) AS avg_price
+    FROM dbo.NashvilleHousing_Clean
+    WHERE SaleDateConverted IS NOT NULL
+      AND SalePrice IS NOT NULL AND SalePrice > 0
+    GROUP BY DATEFROMPARTS(YEAR(SaleDateConverted), MONTH(SaleDateConverted), 1)
+)
+SELECT
+    month_start,
+    avg_price,
+    AVG(avg_price) OVER (ORDER BY month_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS rolling_3m_avg_price
+FROM monthly
+ORDER BY month_start;
+GO
+
+
+/* =========================================================
+   SECTION C — GEOGRAPHY KPIs (City-level)
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   KPI C1 — City leaderboard (volume + avg price)
+   Why: Identify high-demand / high-value areas.
+   --------------------------------------------------------- */
+SELECT
+    PropertySplitCity AS city,
+    COUNT(*) AS transactions_count,
+    AVG(CAST(SalePrice AS BIGINT)) AS avg_price,
+    SUM(CAST(SalePrice AS BIGINT)) AS total_sales_value
+FROM dbo.NashvilleHousing_Clean
+WHERE PropertySplitCity IS NOT NULL
+  AND SalePrice IS NOT NULL AND SalePrice > 0
+GROUP BY PropertySplitCity
+ORDER BY total_sales_value DESC;
+GO
+
+/* ---------------------------------------------------------
+   KPI C2 — Top 10 cities by average price (minimum volume filter)
+   Why: Avoid ranking cities with too few transactions.
+   --------------------------------------------------------- */
+SELECT TOP 10
+    PropertySplitCity AS city,
+    COUNT(*) AS transactions_count,
+    AVG(CAST(SalePrice AS BIGINT)) AS avg_price
+FROM dbo.NashvilleHousing_Clean
+WHERE PropertySplitCity IS NOT NULL
+  AND SalePrice IS NOT NULL AND SalePrice > 0
+GROUP BY PropertySplitCity
+HAVING COUNT(*) >= 100   -- adjust threshold depending on your dataset size
+ORDER BY avg_price DESC;
+GO
+
+/* ---------------------------------------------------------
+   KPI C3 — Price segmentation by city (median per city)
+   Why: More robust city comparison (less sensitive to outliers).
+   --------------------------------------------------------- */
+SELECT DISTINCT
+    PropertySplitCity AS city,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY SalePrice)
+        OVER (PARTITION BY PropertySplitCity) AS median_price_city
+FROM dbo.NashvilleHousing_Clean
+WHERE PropertySplitCity IS NOT NULL
+  AND SalePrice IS NOT NULL AND SalePrice > 0
+ORDER BY median_price_city DESC;
+GO
+
+
+/* =========================================================
+   SECTION D — SEGMENT KPIs (Vacant vs Non-Vacant)
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   KPI D1 — SoldAsVacant impact on price & volume
+   Why: Segment analysis (vacant vs non-vacant)
+   --------------------------------------------------------- */
+WITH s AS (
+    SELECT
+        SoldAsVacant,
+        SalePrice,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY SalePrice)
+            OVER (PARTITION BY SoldAsVacant) AS median_price
+    FROM dbo.NashvilleHousing_Clean
+    WHERE SoldAsVacant IS NOT NULL
+      AND SalePrice IS NOT NULL
+      AND SalePrice > 0
+)
+SELECT
+    SoldAsVacant,
+    COUNT(*) AS transactions_count,
+    AVG(CAST(SalePrice AS BIGINT)) AS avg_price,
+    MAX(median_price) AS median_price   -- MAX pour ramener 1 valeur par groupe
+FROM s
+GROUP BY SoldAsVacant
+ORDER BY transactions_count DESC;
+GO
+
+/* ---------------------------------------------------------
+   KPI D2 — Vacant share by city (rate)
+   Why: Identify cities with high vacant transaction rates.
+   --------------------------------------------------------- */
+SELECT
+    PropertySplitCity AS city,
+    COUNT(*) AS total_transactions,
+    SUM(CASE WHEN SoldAsVacant = 'Yes' THEN 1 ELSE 0 END) AS vacant_transactions,
+    CAST(SUM(CASE WHEN SoldAsVacant = 'Yes' THEN 1 ELSE 0 END) AS FLOAT)
+        / NULLIF(COUNT(*), 0) * 100.0 AS vacant_rate_pct
+FROM dbo.NashvilleHousing_Clean
+WHERE PropertySplitCity IS NOT NULL
+GROUP BY PropertySplitCity
+HAVING COUNT(*) >= 100
+ORDER BY vacant_rate_pct DESC;
+GO
+
+
+/* =========================================================
+   SECTION E — DATA QUALITY KPIs (Governance Reporting)
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   KPI E1 — QualityFlag distribution (should be 100% = 1)
+   Why: Governance proof for enterprise analytics.
+   --------------------------------------------------------- */
+SELECT
+    QualityFlag,
+    COUNT(*) AS rows_count
+FROM dbo.NashvilleHousing_Clean
+GROUP BY QualityFlag;
+GO
+
+/* ---------------------------------------------------------
+   KPI E2 — Critical NULL checks in the GOLD table
+   Why: Ensure no key fields are missing for BI.
+   --------------------------------------------------------- */
+SELECT
+    SUM(CASE WHEN SaleDateConverted IS NULL THEN 1 ELSE 0 END) AS null_sale_date,
+    SUM(CASE WHEN SalePrice IS NULL OR SalePrice <= 0 THEN 1 ELSE 0 END) AS invalid_sale_price,
+    SUM(CASE WHEN PropertySplitCity IS NULL OR LTRIM(RTRIM(PropertySplitCity)) = '' THEN 1 ELSE 0 END) AS null_city,
+    SUM(CASE WHEN PropertySplitAddress IS NULL OR LTRIM(RTRIM(PropertySplitAddress)) = '' THEN 1 ELSE 0 END) AS null_address
+FROM dbo.NashvilleHousing_Clean;
+GO
+
+/* ---------------------------------------------------------
+   KPI E3 — Duplicate check (should be 0)
+   Why: Ensure analytics aren’t inflated by duplicates.
+   --------------------------------------------------------- */
+WITH DuplicateCheck AS (
+    SELECT
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                ParcelID,
+                PropertySplitAddress,
+                SalePrice,
+                SaleDateConverted,
+                LegalReference
+            ORDER BY UniqueID
+        ) AS row_num
+    FROM dbo.NashvilleHousing_Clean
+)
+SELECT
+    COUNT(*) AS remaining_duplicates_clean
+FROM DuplicateCheck
+WHERE row_num > 1;
+GO
+
+
+/* =========================================================
+   SECTION F — EXECUTIVE SUMMARY (One view)
+   ========================================================= */
+
+/* ---------------------------------------------------------
+   KPI F1 — Executive summary snapshot
+   Why: Single query for executive reporting (global view)
+   --------------------------------------------------------- */
+WITH base AS (
+    SELECT
+        SalePrice,
+        SaleDateConverted
+    FROM dbo.NashvilleHousing_Clean
+    WHERE SalePrice IS NOT NULL AND SalePrice > 0
+      AND SaleDateConverted IS NOT NULL
+),
+w AS (
+    SELECT
+        SalePrice,
+        SaleDateConverted,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY SalePrice) OVER () AS median_price
+    FROM base
+)
+SELECT
+    COUNT(*) AS transactions_count,
+    SUM(CAST(SalePrice AS BIGINT)) AS total_sales_value,
+    AVG(CAST(SalePrice AS BIGINT)) AS avg_price,
+    MAX(median_price) AS median_price,         -- 1 valeur globale
+    MIN(SaleDateConverted) AS period_start,
+    MAX(SaleDateConverted) AS period_end
+FROM w;
+GO
+
+
+
 
 
 
